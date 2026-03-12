@@ -3,111 +3,135 @@ import yfinance as yf
 import pandas as pd
 from streamlit_echarts import st_echarts
 import time
+import numpy as np
+from scipy.stats import norm
 
-st.set_page_config(page_title="Ultimate Terminal v6.0", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Pro Terminal v8.0", layout="wide", initial_sidebar_state="expanded")
+
+# --- BLACK-SCHOLES FOR GREEKS ---
+def calculate_greeks(S, K, T, r, sigma, type="call"):
+    d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    if type == "call":
+        delta = norm.cdf(d1)
+        theta = -(S * norm.pdf(d1) * sigma / (2 * np.sqrt(T))) - r * K * np.exp(-r * T) * norm.cdf(d2)
+    else:
+        delta = norm.cdf(d1) - 1
+        theta = -(S * norm.pdf(d1) * sigma / (2 * np.sqrt(T))) + r * K * np.exp(-r * T) * norm.cdf(-d2)
+    gamma = norm.pdf(d1) / (S * sigma * np.sqrt(T))
+    vega = S * norm.pdf(d1) * np.sqrt(T)
+    return {"Delta": round(delta, 2), "Theta": round(theta/365, 2), "Gamma": round(gamma, 4), "Vega": round(vega/100, 2)}
 
 # --- UI STYLING ---
 st.markdown("""
     <style>
     .main { background-color: #0b0e11; color: white; }
-    .stMetric { background-color: #161a1e; border: 1px solid #2b3139; border-radius: 8px; padding: 15px; }
-    .buy-signal { background-color: #00c076; color: white; padding: 20px; border-radius: 8px; text-align: center; font-size: 24px; font-weight: bold; }
-    .sell-signal { background-color: #cf304a; color: white; padding: 20px; border-radius: 8px; text-align: center; font-size: 24px; font-weight: bold; }
-    .goal-reached { background-color: #f0b90b; color: black; padding: 15px; border-radius: 10px; text-align: center; font-weight: bold; font-size: 20px; }
+    [data-testid="stMetricValue"] { color: #ffffff !important; font-size: 26px !important; }
+    .stMetric { background-color: #1e2130; padding: 15px; border-radius: 10px; border: 1px solid #3e4251; }
+    .buy-signal { background-color: #00c076; color: white; padding: 15px; border-radius: 8px; text-align: center; font-size: 22px; font-weight: bold; }
+    .sell-signal { background-color: #cf304a; color: white; padding: 15px; border-radius: 8px; text-align: center; font-size: 22px; font-weight: bold; }
+    .greek-box { background: #262a33; padding: 10px; border-radius: 5px; text-align: center; border: 1px solid #444; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- SIDEBAR CONTROLS ---
-st.sidebar.title("💹 Master Terminal")
-view_mode = st.sidebar.radio("Navigate Mode", ["Live Trading", "Strategy Performance", "Live Market News", "Download Trade Log"])
+# --- SIDEBAR ---
+st.sidebar.title("💹 Ultimate Terminal")
+view_mode = st.sidebar.radio("Navigate", ["Live Trading", "Option Greeks", "Risk Management", "Strategy Stats", "Market News"])
 
-# Fix Variable Names to prevent NameError
-market_map = {
-    "NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK", "SENSEX": "^BSESN",
-    "CRUDE OIL": "CL=F", "BITCOIN": "BTC-USD", "RELIANCE": "RELIANCE.NS"
-}
+market_map = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK", "SENSEX": "^BSESN", "CRUDE OIL": "CL=F", "BITCOIN": "BTC-USD"}
 selected_asset = st.sidebar.selectbox("Market Asset", list(market_map.keys()))
 symbol = market_map[selected_asset]
 tf = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("💰 Live Tracker & Goal")
 e_price = st.sidebar.number_input("Entry Price", value=0.0)
-qty = st.sidebar.number_input("Quantity", value=1)
-daily_goal = st.sidebar.number_input("Daily Profit Goal (₹)", value=5000.0)
+qty_val = st.sidebar.number_input("Qty", value=1)
+goal = st.sidebar.number_input("Daily Goal (₹)", value=5000.0)
 
-# --- ENGINE ---
+# --- DATA ENGINE ---
 @st.cache_data(ttl=5)
-def get_data_engine(symbol, tf):
+def fetch_data(symbol, tf):
     data = yf.download(symbol, period="5d", interval=tf)
     if data.empty: return None, []
     if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
     data['EMA_9'] = data['Close'].ewm(span=9, adjust=False).mean()
     data['EMA_21'] = data['Close'].ewm(span=21, adjust=False).mean()
+    return data
+
+data = fetch_data(symbol, tf)
+
+if data is not None:
+    lp = float(data['Close'].iloc[-1])
     
-    trades = []
-    for i in range(1, len(data)):
-        if (data['EMA_9'].iloc[i] > data['EMA_21'].iloc[i]) and (data['EMA_9'].iloc[i-1] <= data['EMA_21'].iloc[i-1]):
-            trades.append({"Date": data.index[i], "Type": "BUY CALL", "Price": round(data['Close'].iloc[i], 2)})
-        elif (data['EMA_9'].iloc[i] < data['EMA_21'].iloc[i]) and (data['EMA_9'].iloc[i-1] >= data['EMA_21'].iloc[i-1]):
-            trades.append({"Date": data.index[i], "Type": "BUY PUT", "Price": round(data['Close'].iloc[i], 2)})
-    return data, trades
+    # Header
+    col_t, col_r = st.columns([5, 1])
+    col_t.title(f"🚀 {selected_asset}")
+    if col_r.button("🔄 REFRESH"): st.rerun()
 
-res_data, trade_log = get_data_engine(symbol, tf)
-
-if res_data is not None:
-    lp = res_data['Close'].iloc[-1]
-    
-    # Header with Manual Refresh
-    h1, h2 = st.columns([4, 1])
-    h1.title(f"🚀 {selected_asset} Terminal")
-    if h2.button("🔄 REFRESH"): st.rerun()
-
-    # P&L Calculation & Goal Alert
+    # P&L Tracker
     if e_price > 0:
-        current_pnl = (lp - e_price) * qty
-        st.sidebar.metric("Live P&L", f"{current_pnl:.2f}", delta=current_pnl)
-        if current_pnl >= daily_goal:
-            st.markdown(f'<div class="goal-reached">🎉 Daily Goal Reached! ₹{current_pnl:.2f} Profit</div>', unsafe_allow_html=True)
-            st.balloons()
+        pnl = (lp - e_price) * qty_val
+        st.sidebar.metric("Live P&L", f"{pnl:.2f}", delta=pnl)
+        if pnl >= goal: st.balloons()
 
     # --- VIEWS ---
     if view_mode == "Live Trading":
-        l9, l21 = res_data['EMA_9'].iloc[-1], res_data['EMA_21'].iloc[-1]
-        p9, p21 = res_data['EMA_9'].iloc[-2], res_data['EMA_21'].iloc[-2]
+        l9, l21 = data['EMA_9'].iloc[-1], data['EMA_21'].iloc[-1]
+        p9, p21 = data['EMA_9'].iloc[-2], data['EMA_21'].iloc[-2]
         
         c1, c2, c3 = st.columns(3)
-        c1.metric("Live Price", f"{lp:.2f}")
+        c1.metric("LTP", f"{lp:.2f}")
         c2.metric("Trend", "BULLISH" if l9 > l21 else "BEARISH")
         diff = 50 if "NIFTY" in selected_asset else 100
         atm = round(lp / diff) * diff
         c3.metric("ATM Strike", f"{atm}")
 
         if (l9 > l21) and (p9 <= p21):
-            st.markdown(f'<div class="buy-signal">🟢 SIGNAL: BUY CALL (CE) @ {lp:.2f}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="buy-signal">🟢 BUY CALL (CE) @ {lp:.2f}</div>', unsafe_allow_html=True)
         elif (l9 < l21) and (p9 >= p21):
-            st.markdown(f'<div class="sell-signal">🔴 SIGNAL: BUY PUT (PE) @ {lp:.2f}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="sell-signal">🔴 BUY PUT (PE) @ {lp:.2f}</div>', unsafe_allow_html=True)
 
-        # Candlestick Chart
-        chart_df = res_data.tail(50).reset_index()
-        chart_data = [[row['Date' if 'Date' in row else 'Datetime'].strftime('%H:%M'), row['Open'], row['Close'], row['Low'], row['High']] for _, row in chart_df.iterrows()]
-        option = {"xAxis": {"data": [d[0] for d in chart_data]}, "yAxis": {"scale": True}, "tooltip": {"trigger": "axis"}, "series": [{"type": "candlestick", "data": [d[1:] for d in chart_data], "itemStyle": {"color": "#00c076", "color0": "#cf304a"}}]}
-        st_echarts(options=option, height="450px")
+        chart_df = data.tail(50).reset_index()
+        c_data = [[row['Date' if 'Date' in row else 'Datetime'].strftime('%H:%M'), row['Open'], row['Close'], row['Low'], row['High']] for _, row in chart_df.iterrows()]
+        option = {"xAxis": {"data": [d[0] for d in c_data]}, "yAxis": {"scale": True}, "series": [{"type": "candlestick", "data": [d[1:] for d in c_data], "itemStyle": {"color": "#00c076", "color0": "#cf304a"}}]}
+        st_echarts(options=option, height="400px")
 
-    elif view_mode == "Strategy Performance":
-        st.subheader("📊 Signal Accuracy Log")
-        st.table(pd.DataFrame(trade_log).tail(10))
+    elif view_mode == "Option Greeks":
+        st.header("📉 Real-Time Option Greeks (ATM)")
+        # Inputs for Black-Scholes
+        diff = 50 if "NIFTY" in selected_asset else 100
+        atm = round(lp / diff) * diff
+        vol = 0.15 # Approx IV
+        time_exp = 5 / 365 # Approx 5 days to expiry
+        
+        g_call = calculate_greeks(lp, atm, time_exp, 0.07, vol, "call")
+        g_put = calculate_greeks(lp, atm, time_exp, 0.07, vol, "put")
+        
+        st.subheader(f"Strike: {atm}")
+        col_c, col_p = st.columns(2)
+        with col_c:
+            st.write("🟢 **CALL GREEKS**")
+            for k, v in g_call.items(): st.markdown(f'<div class="greek-box">{k}: {v}</div>', unsafe_allow_html=True)
+        with col_p:
+            st.write("🔴 **PUT GREEKS**")
+            for k, v in g_put.items(): st.markdown(f'<div class="greek-box">{k}: {v}</div>', unsafe_allow_html=True)
+        
 
-    elif view_mode == "Live Market News":
-        st.subheader("📰 Market Updates")
-        news = yf.Ticker(symbol).news
-        for item in news[:10]:
-            st.info(f"**{item['title']}**\n\nSource: {item['publisher']}")
+    elif view_mode == "Risk Management":
+        st.header("⚖️ Position Sizing")
+        cap = st.number_input("Capital (₹)", value=100000)
+        risk = st.slider("Risk %", 1, 5, 2)
+        sl_pts = st.number_input("SL Points", value=20.0)
+        if sl_pts > 0:
+            pos_size = (cap * (risk/100)) / sl_pts
+            st.success(f"Quantity: {int(pos_size)} Units")
 
-    elif view_mode == "Download Trade Log":
-        csv = pd.DataFrame(trade_log).to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download Report (CSV)", data=csv, file_name="TradeLog.csv")
+    elif view_mode == "Market News":
+        st.header("📰 News")
+        try:
+            for n in yf.Ticker(symbol).news[:5]: st.info(f"**{n['title']}**\n{n['publisher']}")
+        except: st.write("No news.")
 
-# Auto-refresh
+# Auto Refresh
 time.sleep(10)
 st.rerun()
