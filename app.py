@@ -1,62 +1,92 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import base64
 
-st.set_page_config(page_title="Pro-Trader Terminal", layout="wide")
+st.set_page_config(page_title="Pro-Trader AI Terminal", layout="wide")
 
-# Stylish Signals
+# --- SOUND ALERT LOGIC ---
+def play_sound():
+    # Simple Beep Sound in Base64
+    audio_html = """
+        <audio autoplay>
+            <source src="https://www.soundjay.com/buttons/beep-07a.mp3" type="audio/mpeg">
+        </audio>
+    """
+    st.markdown(audio_html, unsafe_allow_html=True)
+
+# Custom Styling
 st.markdown("""
     <style>
-    .buy-box { background-color: #00ff00; color: black; padding: 20px; border-radius: 10px; text-align: center; font-size: 35px; font-weight: bold; }
-    .sell-box { background-color: #ff0000; color: white; padding: 20px; border-radius: 10px; text-align: center; font-size: 35px; font-weight: bold; }
-    .hold-box { background-color: #1e1e1e; color: white; padding: 20px; border-radius: 10px; text-align: center; font-size: 25px; }
+    .stMetric { background-color: #1e2130; padding: 15px; border-radius: 10px; }
+    .buy-signal { background-color: #00ff00; color: black; padding: 20px; border-radius: 10px; text-align: center; font-size: 28px; font-weight: bold; animation: pulse 1s infinite; }
+    .sell-signal { background-color: #ff0000; color: white; padding: 20px; border-radius: 10px; text-align: center; font-size: 28px; font-weight: bold; animation: pulse 1s infinite; }
+    @keyframes pulse { 0% {transform: scale(1);} 50% {transform: scale(1.02);} 100% {transform: scale(1);} }
     </style>
     """, unsafe_allow_html=True)
 
-# Sidebar
-st.sidebar.header("⚙️ Settings")
-symbol = st.sidebar.text_input("Symbol (e.g. ^NSEI, BTC-USD)", "^NSEI")
-tf = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"])
+# --- SIDEBAR CONTROLS ---
+st.sidebar.title("🕹️ Trading Desk")
+if st.sidebar.button("🔔 Click to Activate Sound Alerts"):
+    st.toast("Sound Alerts Enabled!")
 
-# Data Fetch
+market_list = {
+    "NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK", "SENSEX": "^BSESN",
+    "CRUDE OIL": "CL=F", "BITCOIN": "BTC-USD", "ETH": "ETH-USD"
+}
+selected_market = st.sidebar.selectbox("Market", list(market_list.keys()))
+symbol = market_list[selected_market]
+tf = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("💰 Live P&L Tracker")
+entry_price = st.sidebar.number_input("Entry Price", value=0.0)
+qty = st.sidebar.number_input("Quantity", value=1)
+
+# --- ENGINE ---
 try:
-    data = yf.download(symbol, period="max" if tf in ["1d", "1mo"] else "5d", interval=tf)
-    
+    data = yf.download(symbol, period="2d", interval=tf)
     if not data.empty:
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
 
-        # Indicators
         data['EMA_9'] = data['Close'].ewm(span=9, adjust=False).mean()
         data['EMA_21'] = data['Close'].ewm(span=21, adjust=False).mean()
         
-        last = data.iloc[-1]
-        prev = data.iloc[-2]
+        lp = float(data['Close'].iloc[-1])
+        l9, l21 = float(data['EMA_9'].iloc[-1]), float(data['EMA_21'].iloc[-1])
+        p9, p21 = float(data['EMA_9'].iloc[-2]), float(data['EMA_21'].iloc[-2])
 
-        # Header Price
-        st.title(f"📊 {symbol} Live Terminal")
-        st.metric("LTP (Last Traded Price)", f"{last['Close']:.2f}")
+        # ATM Strike
+        diff = 50 if "NIFTY" in selected_market else 100
+        atm = round(lp / diff) * diff
 
-        # --- DYNAMIC ACTION SIGNAL ---
-        st.markdown("---")
-        if (last['EMA_9'] > last['EMA_21']) and (prev['EMA_9'] <= prev['EMA_21']):
-            st.markdown('<div class="buy-box">🟢 ACTION: BUY CALL / LONG NOW</div>', unsafe_allow_html=True)
-            st.balloons()
-        elif (last['EMA_9'] < last['EMA_21']) and (prev['EMA_9'] >= prev['EMA_21']):
-            st.markdown('<div class="sell-box">🔴 ACTION: BUY PUT / SHORT NOW</div>', unsafe_allow_html=True)
+        # P&L Calculation
+        if entry_price > 0:
+            current_pnl = (lp - entry_price) * qty
+            color = "green" if current_pnl >= 0 else "red"
+            st.sidebar.markdown(f"### P&L: :{color}[{current_pnl:.2f}]")
+
+        # --- DISPLAY ---
+        st.title(f"📊 {selected_market} Live")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Live Price", f"{lp:.2f}")
+        c2.metric("Trend", "BULLISH" if l9 > l21 else "BEARISH")
+        c3.metric("ATM Strike", f"{atm}")
+
+        # --- SIGNAL & SOUND ---
+        if (l9 > l21) and (p9 <= p21):
+            st.markdown(f'<div class="buy-signal">🚀 BUY CALL (CE) @ {lp:.2f}</div>', unsafe_allow_html=True)
+            play_sound()
+            st.info(f"🎯 Target: {lp*1.005:.2f} | 🛡️ SL: {l21:.2f}")
+        elif (l9 < l21) and (p9 >= p21):
+            st.markdown(f'<div class="sell-signal">📉 BUY PUT (PE) @ {lp:.2f}</div>', unsafe_allow_html=True)
+            play_sound()
+            st.info(f"🎯 Target: {lp*0.995:.2f} | 🛡️ SL: {l21:.2f}")
         else:
-            status = "BULLISH (Wait for Exit)" if last['EMA_9'] > last['EMA_21'] else "BEARISH (Wait for Exit)"
-            st.markdown(f'<div class="hold-box">⏳ {status}</div>', unsafe_allow_html=True)
+            st.info("⌛ Trend Following... No New Entry.")
 
-        # --- CANDLESTICK CHART ---
-        st.subheader(f"🕯️ {tf} Candle Chart")
-        # Streamlit ka inbuilt candle chart (available in latest version)
         st.area_chart(data[['Close', 'EMA_9', 'EMA_21']])
-        
-        st.write("Target & SL Guide:")
-        st.info(f"Entry: {last['Close']:.2f} | Target: {last['Close']*1.008:.2f} (Scalp) | SL: {last['EMA_21']:.2f}")
 
-    else:
-        st.error("Invalid Symbol! Please check.")
 except Exception as e:
-    st.error(f"Error: {e}")
+    st.error(f"Waiting for Data... {e}")
