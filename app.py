@@ -4,148 +4,110 @@ import pandas as pd
 from streamlit_echarts import st_echarts
 import time
 import numpy as np
-from scipy.stats import norm
 
-st.set_page_config(page_title="Master AI Terminal", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="AI MASTER TERMINAL v16", layout="wide", initial_sidebar_state="expanded")
 
-# --- ULTIMATE CSS (Global Visibility & Theme) ---
+# --- CUSTOM CSS ---
 st.markdown("""
     <style>
     .main { background-color: #0b0e11; color: white; }
-    /* Metric Boxes Visibility */
     [data-testid="stMetricValue"] { color: #00ff00 !important; font-size: 26px !important; font-weight: bold; }
-    [data-testid="stMetricLabel"] { color: #ffffff !important; font-size: 16px !important; }
     .stMetric { background-color: #1e2130; padding: 15px; border-radius: 10px; border: 1px solid #3e4251; }
-    
-    /* Sidebar Text Visibility Fix */
-    section[data-testid="stSidebar"] { background-color: #111418 !important; }
-    section[data-testid="stSidebar"] .stText, section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] span {
-        color: #ffffff !important; font-weight: bold !important;
-    }
-
-    /* Signal Cards */
-    .buy-card { background-color: #00c076; color: white; padding: 20px; border-radius: 10px; text-align: center; font-size: 24px; font-weight: bold; margin-bottom: 10px; }
-    .sell-card { background-color: #cf304a; color: white; padding: 20px; border-radius: 10px; text-align: center; font-size: 24px; font-weight: bold; margin-bottom: 10px; }
-    
-    /* Greeks Table Visibility */
-    .greek-box { background-color: #262a33; border: 1px solid #4e5461; padding: 10px; border-radius: 5px; text-align: center; margin-bottom: 5px; }
-    .greek-val { color: #00ff00; font-size: 18px; font-weight: bold; }
+    .operator-buy { background-color: #155724; color: #d4edda; padding: 10px; border-radius: 8px; text-align: center; font-weight: bold; margin-bottom: 10px; }
+    .operator-sell { background-color: #721c24; color: #f8d7da; padding: 10px; border-radius: 8px; text-align: center; font-weight: bold; margin-bottom: 10px; }
+    .master-signal { background: linear-gradient(90deg, #f0b90b, #e0a800); color: black; padding: 20px; border-radius: 12px; text-align: center; font-size: 28px; font-weight: bold; border: 4px solid white; }
+    .pnl-summary { background-color: #1c2127; border: 1px dashed #f0b90b; padding: 15px; border-radius: 8px; margin-top: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- ENGINE: GREEKS ---
-def get_greeks(S, K, T, r, sigma, type="call"):
-    if T <= 0: T = 0.00001
-    d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
-    d2 = d1 - sigma * np.sqrt(T)
-    if type == "call":
-        delta = norm.cdf(d1)
-        theta = -(S * norm.pdf(d1) * sigma / (2 * np.sqrt(T))) - r * K * np.exp(-r * T) * norm.cdf(d2)
-    else:
-        delta = norm.cdf(d1) - 1
-        theta = -(S * norm.pdf(d1) * sigma / (2 * np.sqrt(T))) + r * K * np.exp(-r * T) * norm.cdf(-d2)
-    gamma = norm.pdf(d1) / (S * sigma * np.sqrt(T))
-    return {"DELTA": round(delta, 2), "THETA": round(theta/365, 2), "GAMMA": round(gamma, 4)}
-
-# --- SIDEBAR CONTROLS ---
-st.sidebar.title("💹 AI PRO TERMINAL")
-nav_mode = st.sidebar.radio("Navigate", ["Live Trading", "Option Greeks", "Risk Management", "Trade Reports"])
-
-# COMPLETE MARKET LIST
-markets = {
-    "NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK", "SENSEX": "^BSESN",
-    "GOLD": "GC=F", "CRUDE OIL": "CL=F", "NATURAL GAS": "NG=F",
-    "BITCOIN": "BTC-USD", "ETH": "ETH-USD", "BNB": "BNB-USD"
-}
-selected_asset = st.sidebar.selectbox("Market Asset", list(markets.keys()))
-symbol = markets[selected_asset]
-timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("💰 Live P&L Monitor")
-entry_p = st.sidebar.number_input("Entry Price", value=0.0)
-qty_v = st.sidebar.number_input("Quantity", value=1)
-goal_p = st.sidebar.number_input("Daily Goal (₹)", value=5000.0)
-
-# --- DATA ENGINE ---
-@st.cache_data(ttl=5)
-def get_live_market_data(symbol, tf):
-    df = yf.download(symbol, period="2d", interval=tf)
-    if df.empty: return None
-    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+# --- ENGINE ---
+def get_indicators(df):
     df['EMA9'] = df['Close'].ewm(span=9, adjust=False).mean()
     df['EMA21'] = df['Close'].ewm(span=21, adjust=False).mean()
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    df['RSI'] = 100 - (100 / (1 + (gain / loss)))
+    df['Vol_Avg'] = df['Volume'].rolling(window=5).mean()
     return df
 
-data = get_live_market_data(symbol, timeframe)
+# --- SIDEBAR ---
+st.sidebar.title("MASTER TERMINAL v16")
+nav = st.sidebar.radio("Navigate", ["Live Trading", "Day-End Summary", "Risk Management"])
 
-if data is not None:
-    lp = float(data['Close'].iloc[-1])
+markets = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK", "GOLD": "GC=F", "CRUDE OIL": "CL=F", "BITCOIN": "BTC-USD"}
+selected_asset = st.sidebar.selectbox("Market Asset", list(markets.keys()))
+symbol = markets[selected_asset]
+
+st.sidebar.markdown("---")
+entry_p = st.sidebar.number_input("Entry Price", value=0.0)
+qty = st.sidebar.number_input("Qty", value=1)
+
+# Day End Tracking
+if 'total_pnl' not in st.session_state: st.session_state.total_pnl = 0.0
+
+# --- DATA FETCH (Dual Timeframe) ---
+@st.cache_data(ttl=5)
+def fetch_dual_tf(symbol):
+    d_short = get_indicators(yf.download(symbol, period="2d", interval="1m"))
+    d_long = get_indicators(yf.download(symbol, period="5d", interval="15m"))
+    return d_short, d_long
+
+d_1m, d_15m = fetch_dual_tf(symbol)
+
+if d_1m is not None and d_15m is not None:
+    # Current values
+    lp = float(d_1m['Close'].iloc[-1])
+    vol_curr, vol_avg = d_1m['Volume'].iloc[-1], d_1m['Vol_Avg'].iloc[-1]
     
-    # Header & Manual Refresh
-    c_h, c_r = st.columns([5, 1])
-    c_h.title(f"🚀 {selected_asset} Terminal")
-    if c_r.button("🔄 REFRESH"): st.rerun()
+    # Trend Analysis
+    trend_1m = "UP" if d_1m['EMA9'].iloc[-1] > d_1m['EMA21'].iloc[-1] else "DOWN"
+    trend_15m = "UP" if d_15m['EMA9'].iloc[-1] > d_15m['EMA21'].iloc[-1] else "DOWN"
 
-    # Live P&L sidebar logic
-    if entry_p > 0:
-        pnl = (lp - entry_p) * qty_v
-        st.sidebar.metric("Live P&L", f"{pnl:.2f}", delta=f"{pnl:.2f} ₹")
-        if pnl >= goal_p: st.balloons()
-
-    # --- TOP METRICS ---
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Current Price", f"{lp:.2f}")
-    col2.metric("Market Trend", "BULLISH 🟢" if data['EMA9'].iloc[-1] > data['EMA21'].iloc[-1] else "BEARISH 🔴")
-    diff = 50 if "NIFTY" in selected_asset else 100
-    atm = round(lp / diff) * diff
-    col3.metric("ATM Strike", f"{atm}")
-
-    # --- VIEWS ---
-    if nav_mode == "Live Trading":
-        l9, l21 = data['EMA9'].iloc[-1], data['EMA21'].iloc[-1]
-        p9, p21 = data['EMA9'].iloc[-2], data['EMA21'].iloc[-2]
-
-        if (l9 > l21) and (p9 <= p21):
-            st.markdown(f'<div class="buy-card">🚀 ENTRY: BUY CALL (CE) @ {lp:.2f}</div>', unsafe_allow_html=True)
-        elif (l9 < l21) and (p9 >= p21):
-            st.markdown(f'<div class="sell-card">📉 ENTRY: BUY PUT (PE) @ {lp:.2f}</div>', unsafe_allow_html=True)
-        else:
-            st.info("⌛ Waiting for High-Accuracy Crossover...")
-
-        # Professional Candlestick Chart
-        chart_df = data.tail(60).reset_index()
-        c_data = [[row['Date' if 'Date' in row else 'Datetime'].strftime('%H:%M'), row['Open'], row['Close'], row['Low'], row['High']] for _, row in chart_df.iterrows()]
-        option = {"xAxis": {"data": [d[0] for d in c_data]}, "yAxis": {"scale": True}, "series": [{"type": "candlestick", "data": [d[1:] for d in c_data], "itemStyle": {"color": "#00c076", "color0": "#cf304a"}}]}
-        st_echarts(options=option, height="450px")
-
-    elif nav_mode == "Option Greeks":
-        st.subheader("📉 ATM Option Greeks")
-        g_c = get_greeks(lp, atm, 0.02, 0.07, 0.20, "call")
-        g_p = get_greeks(lp, atm, 0.02, 0.07, 0.20, "put")
+    if nav == "Live Trading":
+        st.title(f"📊 {selected_asset} Pro Dashboard")
         
-        c_c, c_p = st.columns(2)
-        with c_c:
-            st.write("🟢 **CALL GREEKS**")
-            for k, v in g_c.items(): st.markdown(f'<div class="greek-box">{k}<br><span class="greek-val">{v}</span></div>', unsafe_allow_html=True)
-        with c_p:
-            st.write("🔴 **PUT GREEKS**")
-            for k, v in g_p.items(): st.markdown(f'<div class="greek-box">{k}<br><span class="greek-val">{v}</span></div>', unsafe_allow_html=True)
+        # Dual Trend Metrics
+        m1, m2, m3 = st.columns(3)
+        m1.metric("LTP", f"{lp:.2f}")
+        m2.metric("Short Trend (1m)", trend_1m)
+        m3.metric("Major Trend (15m)", trend_15m)
 
-    elif nav_mode == "Risk Management":
-        st.header("⚖️ Risk Calculator")
-        cap = st.number_input("Total Capital (₹)", value=100000)
-        risk_per = st.slider("Risk per trade (%)", 1, 5, 2)
-        sl_pts = st.number_input("Stop Loss Points", value=20.0)
-        if sl_pts > 0:
-            qty = (cap * (risk_per/100)) / sl_pts
-            st.success(f"Recommended Quantity: **{int(qty)} Units**")
+        # Operator Alert
+        if vol_curr > (vol_avg * 1.5):
+            div_class = "operator-buy" if d_1m['Close'].iloc[-1] > d_1m['Open'].iloc[-1] else "operator-sell"
+            st.markdown(f'<div class="{div_class}">🐳 OPERATOR ACTIVITY: {"BUYING" if "buy" in div_class else "SELLING"} DETECTED</div>', unsafe_allow_html=True)
 
-    elif nav_mode == "Trade Reports":
-        st.header("📂 Download Reports")
-        st.write("Current session logs are ready for export.")
-        if st.button("Generate CSV"):
-            st.write("Exporting...")
+        # Master Confirmed Signal
+        st.markdown("---")
+        if trend_1m == "UP" and trend_15m == "UP":
+            st.markdown(f'<div class="master-signal">🔥 MASTER BUY CONFIRMED (CALL) @ {lp:.2f}</div>', unsafe_allow_html=True)
+            st.info(f"Target: {lp*1.01:.2f} | SL: {d_1m['EMA21'].iloc[-1]:.2f}")
+        elif trend_1m == "DOWN" and trend_15m == "DOWN":
+            st.markdown(f'<div class="master-signal">🔥 MASTER SELL CONFIRMED (PUT) @ {lp:.2f}</div>', unsafe_allow_html=True)
+            st.info(f"Target: {lp*0.99:.2f} | SL: {d_1m['EMA21'].iloc[-1]:.2f}")
+        else:
+            st.warning("⚠️ TREND MISMATCH: 1m and 15m are not in sync. Avoid fresh entry.")
+
+        # Real-time Chart
+        chart_df = d_1m.tail(50).reset_index()
+        c_data = [[row['Datetime'].strftime('%H:%M'), row['Open'], row['Close'], row['Low'], row['High']] for _, row in chart_df.iterrows()]
+        option = {"xAxis": {"data": [d[0] for d in c_data]}, "yAxis": {"scale": True}, "series": [{"type": "candlestick", "data": [d[1:] for d in c_data], "itemStyle": {"color": "#00c076", "color0": "#cf304a"}}]}
+        st_echarts(options=option, height="400px")
+
+    elif nav == "Day-End Summary":
+        st.title("📝 Trading Day Summary")
+        if entry_p > 0:
+            current_trade_pnl = (lp - entry_p) * qty
+            if st.button("Save Trade to Summary"):
+                st.session_state.total_pnl += current_trade_pnl
+                st.success("Trade Saved!")
+        
+        st.markdown(f'''<div class="pnl-summary">
+            <h3>Total Realized P&L: <span style="color:{'#00ff00' if st.session_state.total_pnl >=0 else '#ff0000'}">
+            ₹ {st.session_state.total_pnl:.2f}</span></h3>
+            <p>Market Status: {"Closed" if time.localtime().tm_hour >= 16 else "Open"}</p>
+        </div>''', unsafe_allow_html=True)
 
 # Auto Refresh 10s
 time.sleep(10)
