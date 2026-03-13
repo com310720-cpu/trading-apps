@@ -6,22 +6,21 @@ import time
 import numpy as np
 from scipy.stats import norm
 
-st.set_page_config(page_title="MASTER AI v22", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MASTER AI v24", layout="wide", initial_sidebar_state="expanded")
 
-# --- FORCE VISIBILITY CSS ---
+# --- ADVANCED UI CSS ---
 st.markdown("""
     <style>
     .main { background-color: #0b0e11; color: #ffffff; }
-    [data-testid="stMetricValue"] { color: #00ff00 !important; font-size: 26px !important; font-weight: bold; }
-    .stMetric { background-color: #1e2130; padding: 15px; border-radius: 12px; border: 1px solid #3e4251; }
+    [data-testid="stMetricValue"] { color: #00ff00 !important; font-size: 24px !important; font-weight: bold; }
+    .stMetric { background-color: #1e2130; padding: 12px; border-radius: 12px; border: 1px solid #3e4251; }
     section[data-testid="stSidebar"] { background-color: #111418 !important; }
-    section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] p { color: #ffffff !important; font-weight: bold; }
-    .master-signal { background: linear-gradient(90deg, #f0b90b, #ff9900); color: #000000 !important; padding: 20px; border-radius: 15px; text-align: center; font-size: 24px; font-weight: bold; border: 3px solid #ffffff; }
-    .pnl-box { background-color: #262a33; padding: 15px; border-radius: 10px; border-left: 5px solid #00ff00; margin-top: 10px; }
+    .signal-card { background: linear-gradient(135deg, #f0b90b, #ff9900); color: black !important; padding: 20px; border-radius: 15px; text-align: center; border: 3px solid white; margin-bottom: 20px; }
+    .virtual-pnl { background-color: #1c2127; border: 2px dashed #f0b90b; padding: 15px; border-radius: 10px; margin-top: 10px; text-align: center; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- CALCULATIONS ---
+# --- TECHNICAL ENGINE ---
 def get_indicators(df):
     df['EMA9'] = df['Close'].ewm(span=9, adjust=False).mean()
     df['EMA21'] = df['Close'].ewm(span=21, adjust=False).mean()
@@ -29,113 +28,85 @@ def get_indicators(df):
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     df['RSI'] = 100 - (100 / (1 + (gain / loss)))
-    df['Vol_Avg'] = df['Volume'].rolling(window=5).mean()
     return df
 
-def get_greeks(S, K, T, r, sigma, type="call"):
-    if T <= 0: T = 0.00001
-    d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
-    d2 = d1 - sigma * np.sqrt(T)
-    if type == "call":
-        delta = norm.cdf(d1); theta = -(S * norm.pdf(d1) * sigma / (2 * np.sqrt(T))) - r * K * np.exp(-r * T) * norm.cdf(d2)
-    else:
-        delta = norm.cdf(d1) - 1; theta = -(S * norm.pdf(d1) * sigma / (2 * np.sqrt(T))) + r * K * np.exp(-r * T) * norm.cdf(-d2)
-    return {"DELTA": round(delta, 2), "THETA": round(theta/365, 2), "GAMMA": round(norm.pdf(d1)/(S*sigma*np.sqrt(T)), 4)}
+# --- SIDEBAR & NAVIGATION ---
+st.sidebar.title("💎 MASTER AI v24")
+nav = st.sidebar.radio("Navigate", ["Live Trading & Signals", "Paper Trading", "Full Option Chain", "Risk Mgmt"])
 
-# --- SIDEBAR ---
-st.sidebar.title("💎 MASTER AI v22")
-nav = st.sidebar.radio("Navigate", ["Live Trading", "Option Greeks", "AI News", "Risk Mgmt"])
-
-markets = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK", "SENSEX": "^BSESN", "GOLD": "GC=F", "CRUDE OIL": "CL=F", "BITCOIN": "BTC-USD", "ETH": "ETH-USD"}
+markets = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK", "SENSEX": "^BSESN", "CRUDE OIL": "CL=F", "BITCOIN": "BTC-USD"}
 selected_asset = st.sidebar.selectbox("Market Asset", list(markets.keys()))
 symbol = markets[selected_asset]
-tf_choice = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
 
-st.sidebar.markdown("---")
-entry_p = st.sidebar.number_input("My Entry Price", value=0.0)
-qty = st.sidebar.number_input("Quantity", value=1)
+# Paper Trading State
+if 'virtual_balance' not in st.session_state: st.session_state.virtual_balance = 100000.0
+if 'trades' not in st.session_state: st.session_state.trades = []
 
 # --- DATA FETCH ---
 @st.cache_data(ttl=5)
-def fetch_all_data(symbol, tf):
-    try:
-        d1 = get_indicators(yf.download(symbol, period="2d", interval=tf))
-        d15 = get_indicators(yf.download(symbol, period="5d", interval="15m"))
-        return d1, d15
-    except: return None, None
+def get_all_data(symbol):
+    d_m = get_indicators(yf.download(symbol, period="2d", interval="1m"))
+    d_l = get_indicators(yf.download(symbol, period="5d", interval="15m"))
+    return d_m, d_l
 
-d_main, d_long = fetch_all_data(symbol, tf_choice)
+data_m, data_l = get_all_data(symbol)
 
-if d_main is not None and not d_main.empty:
-    lp = float(d_main['Close'].iloc[-1])
-    
-    # Live P&L Monitor (Sidebar mein hamesha dikhega)
-    if entry_p > 0:
-        pnl = (lp - entry_p) * qty
-        st.sidebar.markdown(f'''<div class="pnl-box">
-            <small>LIVE P&L</small><br>
-            <span style="font-size:20px; color:{'#00ff00' if pnl>=0 else '#ff4b4b'}">₹ {pnl:.2f}</span>
-        </div>''', unsafe_allow_html=True)
+if data_m is not None and not data_m.empty:
+    lp = float(data_m['Close'].iloc[-1])
+    trend_s = "UP" if data_m['EMA9'].iloc[-1] > data_m['EMA21'].iloc[-1] else "DOWN"
+    trend_l = "UP" if data_l['EMA9'].iloc[-1] > data_l['EMA21'].iloc[-1] else "DOWN"
 
-    # UI Header
-    h_col, r_col = st.columns([5, 1])
-    h_col.title(f"🚀 {selected_asset}")
-    if r_col.button("🔄 REFRESH"): st.rerun()
+    if nav == "Live Trading & Signals":
+        st.title(f"🚀 {selected_asset} Terminal")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("LTP", f"{lp:.2f}")
+        c2.metric("Trend (1m)", trend_s)
+        c3.metric("Trend (15m)", trend_l)
 
-    # Metrics
-    t1, t2, t3, t4 = st.columns(4)
-    t1.metric("LTP", f"{lp:.2f}")
-    t2.metric("RSI", f"{d_main['RSI'].iloc[-1]:.1f}")
-    trend_s = "UP" if d_main['EMA9'].iloc[-1] > d_main['EMA21'].iloc[-1] else "DOWN"
-    trend_l = "UP" if d_long['EMA9'].iloc[-1] > d_long['EMA21'].iloc[-1] else "DOWN"
-    t3.metric(f"Trend ({tf_choice})", trend_s)
-    t4.metric("Major Trend", trend_l)
-
-    if nav == "Live Trading":
-        # Master Signal
+        # Signal Logic
         st.markdown("---")
         if trend_s == "UP" and trend_l == "UP":
-            st.markdown(f'<div class="master-signal">🔥 MASTER BUY CONFIRMED @ {lp:.2f}</div>', unsafe_allow_html=True)
-            st.info(f"Target: {lp*1.01:.2f} | SL: {d_main['EMA21'].iloc[-1]:.2f}")
+            st.markdown(f'''<div class="signal-card">
+                <h2>🔥 MASTER BUY CONFIRMED</h2>
+                <p>Entry: Above {lp:.2f} | Target: {lp*1.01:.2f} | SL: {lp*0.995:.2f}</p>
+                <b>Buy CE (Call Option)</b>
+            </div>''', unsafe_allow_html=True)
         elif trend_s == "DOWN" and trend_l == "DOWN":
-            st.markdown(f'<div class="master-signal">🔥 MASTER SELL CONFIRMED @ {lp:.2f}</div>', unsafe_allow_html=True)
-            st.info(f"Target: {lp*0.99:.2f} | SL: {d_main['EMA21'].iloc[-1]:.2f}")
+            st.markdown(f'''<div class="signal-card" style="background: linear-gradient(135deg, #cf304a, #ff4b4b);">
+                <h2 style="color:white;">🔥 MASTER SELL CONFIRMED</h2>
+                <p style="color:white;">Entry: Below {lp:.2f} | Target: {lp*0.99:.2f} | SL: {lp*1.005:.2f}</p>
+                <b style="color:white;">Buy PE (Put Option)</b>
+            </div>''', unsafe_allow_html=True)
         else:
-            st.warning("⌛ SIDEWAYS: Waiting for Trend Sync...")
+            st.warning("⌛ SIDEWAYS: Waiting for Trends to Sync...")
 
-        # --- NEW ROBUST CHART ENGINE ---
-        try:
-            chart_df = d_main.tail(40).reset_index()
-            t_col = 'Datetime' if 'Datetime' in chart_df.columns else 'Date'
-            
-            # Formating data to prevent "null or undefined" error
-            times = chart_df[t_col].dt.strftime('%H:%M').tolist()
-            values = chart_df[['Open', 'Close', 'Low', 'High']].values.tolist()
-            
-            option = {
-                "tooltip": {"trigger": "axis", "axisPointer": {"type": "cross"}},
-                "xAxis": {"data": times},
-                "yAxis": {"scale": True},
-                "series": [{
-                    "type": "candlestick",
-                    "data": values,
-                    "itemStyle": {"color": "#00c076", "color0": "#cf304a", "borderColor": "#00c076", "borderColor0": "#cf304a"}
-                }]
-            }
-            st_echarts(options=option, height="450px")
-        except Exception as e:
-            st.error(f"Chart System Rebooting... {e}")
+        # Chart
+        chart_df = data_m.tail(40).reset_index()
+        t_col = 'Datetime' if 'Datetime' in chart_df.columns else 'Date'
+        times = chart_df[t_col].dt.strftime('%H:%M').tolist()
+        vals = chart_df[['Open', 'Close', 'Low', 'High']].values.tolist()
+        opt = {"tooltip":{"trigger":"axis"},"xAxis":{"data":times},"yAxis":{"scale":True},
+               "series":[{"type":"candlestick","data":vals,"itemStyle":{"color":"#00c076","color0":"#cf304a"}}]}
+        st_echarts(options=opt, height="400px")
 
-    elif nav == "Option Greeks":
-        diff = 50 if "NIFTY" in selected_asset else 100
-        atm = round(lp / diff) * diff
-        g_c = get_greeks(lp, atm, 0.02, 0.07, 0.20, "call")
-        g_p = get_greeks(lp, atm, 0.02, 0.07, 0.20, "put")
-        st.subheader(f"ATM Greeks ({atm} Strike)")
-        c1, c2 = st.columns(2)
-        with c1: st.write("🟢 CALL"); st.json(g_c)
-        with c2: st.write("🔴 PUT"); st.json(g_p)
+    elif nav == "Paper Trading":
+        st.title("📝 Paper Trading Simulator")
+        st.sidebar.subheader(f"Virtual Funds: ₹{st.session_state.virtual_balance:.2f}")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("EXECUTE BUY (VIRTUAL)"):
+                st.session_state.trades.append({"asset": selected_asset, "price": lp, "type": "BUY", "time": time.ctime()})
+                st.success(f"Bought @ {lp}")
+        with col2:
+            if st.button("RESET PORTFOLIO"):
+                st.session_state.virtual_balance = 100000.0
+                st.session_state.trades = []
+                st.rerun()
 
-# Refresh 10s
+        if st.session_state.trades:
+            st.table(pd.DataFrame(st.session_state.trades))
+
+# Auto Refresh 10s
 time.sleep(10)
 st.rerun()
