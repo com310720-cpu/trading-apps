@@ -4,28 +4,22 @@ import pandas as pd
 from streamlit_echarts import st_echarts
 import time
 import numpy as np
-from scipy.stats import norm
 
-st.set_page_config(page_title="MASTER AI v23", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MASTER AI v25", layout="wide", initial_sidebar_state="expanded")
 
-# --- ADVANCED UI CSS ---
+# --- GLOBAL STYLE ---
 st.markdown("""
     <style>
     .main { background-color: #0b0e11; color: #ffffff; }
     [data-testid="stMetricValue"] { color: #00ff00 !important; font-size: 24px !important; font-weight: bold; }
-    .stMetric { background-color: #1e2130; padding: 10px; border-radius: 10px; border: 1px solid #3e4251; }
-    section[data-testid="stSidebar"] { background-color: #111418 !important; }
-    .signal-card { background: linear-gradient(135deg, #f0b90b, #ff9900); color: black !important; padding: 20px; border-radius: 15px; text-align: center; border: 3px solid white; margin-bottom: 20px; }
-    .option-table { width: 100%; border-collapse: collapse; color: white; background-color: #1e2130; border-radius: 10px; overflow: hidden; }
-    .option-table th { background-color: #2b3139; padding: 10px; border: 1px solid #3e4251; }
-    .option-table td { padding: 8px; text-align: center; border: 1px solid #3e4251; font-size: 14px; }
-    .highlight-ce { background-color: rgba(0, 192, 118, 0.2); }
-    .highlight-pe { background-color: rgba(207, 48, 74, 0.2); }
+    .stMetric { background-color: #1e2130; padding: 12px; border-radius: 10px; border: 1px solid #3e4251; }
+    .signal-card { background: linear-gradient(135deg, #f0b90b, #ff9900); color: black !important; padding: 20px; border-radius: 15px; text-align: center; border: 3px solid white; margin-bottom: 20px; font-weight: bold; }
+    .premium-box { background-color: #1c2127; border-left: 5px solid #f0b90b; padding: 15px; border-radius: 8px; margin-top: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- TECHNICAL CALCULATIONS ---
-def get_indicators(df):
+# --- CALCULATIONS ---
+def add_indicators(df):
     df['EMA9'] = df['Close'].ewm(span=9, adjust=False).mean()
     df['EMA21'] = df['Close'].ewm(span=21, adjust=False).mean()
     delta = df['Close'].diff()
@@ -35,101 +29,98 @@ def get_indicators(df):
     df['Vol_Avg'] = df['Volume'].rolling(window=5).mean()
     return df
 
-# --- OPTION CHAIN ENGINE ---
-def fetch_option_chain(symbol, spot_price):
-    try:
-        tk = yf.Ticker(symbol)
-        expirations = tk.options
-        if not expirations: return None
-        chain = tk.option_chain(expirations[0])
-        diff = 50 if "NIFTY" in symbol else 100
-        atm = round(spot_price / diff) * diff
-        
-        calls = chain.calls[(chain.calls['strike'] >= atm - (diff*5)) & (chain.calls['strike'] <= atm + (diff*5))]
-        puts = chain.puts[(chain.puts['strike'] >= atm - (diff*5)) & (chain.puts['strike'] <= atm + (diff*5))]
-        return calls, puts, atm
-    except: return None, None, None
+# --- SIDEBAR & ASSETS ---
+st.sidebar.title("💎 MASTER AI v25")
+nav = st.sidebar.radio("Navigate", ["Live Trading & Signal", "Option Chain & Greeks", "Paper Trading", "News"])
 
-# --- SIDEBAR ---
-st.sidebar.title("💎 MASTER AI v23")
-nav = st.sidebar.radio("Navigate", ["Live Trading & Signals", "Full Option Chain", "Option Greeks", "P&L Summary"])
-
-markets = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK", "SENSEX": "^BSESN", "CRUDE OIL": "CL=F", "BITCOIN": "BTC-USD"}
+# Sabhi Assets Add Kar Diye Gaye Hain
+markets = {
+    "NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK", "SENSEX": "^BSESN",
+    "BITCOIN": "BTC-USD", "ETH": "ETH-USD", "BNB": "BNB-USD",
+    "CRUDE OIL": "CL=F", "GOLD": "GC=F", "SILVER": "SI=F", "NATURAL GAS": "NG=F"
+}
 selected_asset = st.sidebar.selectbox("Market Asset", list(markets.keys()))
 symbol = markets[selected_asset]
-tf = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
 
-st.sidebar.markdown("---")
-entry_p = st.sidebar.number_input("Entry Price", value=0.0)
-qty = st.sidebar.number_input("Quantity", value=1)
+# Timeframe restored
+tf_choice = st.sidebar.selectbox("Select Timeframe", ["1m", "5m", "15m", "1h", "1d"], index=0)
 
-# --- DATA FETCH ---
+# --- DATA ENGINE ---
 @st.cache_data(ttl=5)
-def get_all_data(symbol, tf):
-    d_m = get_indicators(yf.download(symbol, period="2d", interval=tf))
-    d_l = get_indicators(yf.download(symbol, period="5d", interval="15m"))
-    return d_m, d_l
+def fetch_data_v25(symbol, tf):
+    try:
+        d1 = add_indicators(yf.download(symbol, period="2d", interval=tf))
+        d15 = add_indicators(yf.download(symbol, period="5d", interval="15m"))
+        return d1, d15
+    except: return None, None
 
-data_m, data_l = get_all_data(symbol, tf)
+d_main, d_long = fetch_data_v25(symbol, tf_choice)
 
-if data_m is not None and not data_m.empty:
-    lp = float(data_m['Close'].iloc[-1])
-    trend_s = "UP" if data_m['EMA9'].iloc[-1] > data_m['EMA21'].iloc[-1] else "DOWN"
-    trend_l = "UP" if data_l['EMA9'].iloc[-1] > data_l['EMA21'].iloc[-1] else "DOWN"
-    rsi = data_m['RSI'].iloc[-1]
+if d_main is not None and not d_main.empty:
+    lp = float(d_main['Close'].iloc[-1])
+    trend_s = "UP" if d_main['EMA9'].iloc[-1] > d_main['EMA21'].iloc[-1] else "DOWN"
+    trend_l = "UP" if d_long['EMA9'].iloc[-1] > d_long['EMA21'].iloc[-1] else "DOWN"
+    vol_curr, vol_avg = float(d_main['Volume'].iloc[-1]), float(d_main['Vol_Avg'].iloc[-1])
 
-    # --- TOP METRICS ---
-    st.title(f"🚀 {selected_asset} Terminal")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("LTP", f"{lp:.2f}")
-    c2.metric("RSI", f"{rsi:.1f}")
-    c3.metric("Short Trend", trend_s)
-    c4.metric("Major Trend", trend_l)
+    # Header & Refresh
+    c_head, c_ref = st.columns([5, 1])
+    c_head.title(f"🚀 {selected_asset} Terminal")
+    if c_ref.button("🔄 REFRESH"): st.rerun()
 
-    if nav == "Live Trading & Signals":
-        # --- PRECISION ENTRY/EXIT SIGNAL ---
+    if nav == "Live Trading & Signal":
+        # Metrics
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Price", f"{lp:.2f}")
+        m2.metric("RSI", f"{d_main['RSI'].iloc[-1]:.1f}")
+        m3.metric("Trend Sync", "MATCHED ✅" if trend_s == trend_l else "WAITING ⌛")
+        m4.metric("Vol Spurt", f"{round(vol_curr/vol_avg, 1) if vol_avg > 0 else 1}x")
+
+        # --- OPTION SIGNAL & PREMIUM ENTRY ---
         st.markdown("---")
-        calls, puts, atm = fetch_option_chain(symbol, lp)
-        
+        diff = 50 if "NIFTY" in selected_asset else 100
+        atm_strike = round(lp / diff) * diff
+
         if trend_s == "UP" and trend_l == "UP":
-            premium = calls[calls['strike'] == atm]['lastPrice'].values[0] if calls is not None else 0
             st.markdown(f'''<div class="signal-card">
-                <h2 style="margin:0;">🔥 MASTER BUY SIGNAL: CALL (CE)</h2>
-                <p style="font-size:20px; margin:5px;">Buy {atm} CE @ ₹{premium:.2f}</p>
-                <b style="color:white;">Target: ₹{premium*1.2:.2f} | SL: ₹{premium*0.8:.2f}</b><br>
-                <small>Entry Reason: Dual Timeframe Bullish + RSI Strength</small>
+                <h2 style="margin:0;">🔥 SIGNAL: STRONG BUY (CALL)</h2>
+                <p style="font-size:18px;">Target: {lp*1.01:.2f} | SL: {lp*0.995:.2f}</p>
+            </div>''', unsafe_allow_html=True)
+            st.markdown(f'''<div class="premium-box">
+                <b>🎯 OPTION ENTRY:</b> Buy <b>{atm_strike} CE</b><br>
+                <b>Entry Price:</b> Current Market Premium<br>
+                <b>Target:</b> 25% Profit | <b>StopLoss:</b> 15% of Premium
             </div>''', unsafe_allow_html=True)
         elif trend_s == "DOWN" and trend_l == "DOWN":
-            premium = puts[puts['strike'] == atm]['lastPrice'].values[0] if puts is not None else 0
-            st.markdown(f'<div class="signal-card" style="background: linear-gradient(135deg, #cf304a, #ff4b4b);"> \
-                <h2 style="margin:0; color:white;">🔥 MASTER SELL SIGNAL: PUT (PE)</h2> \
-                <p style="font-size:20px; margin:5px; color:white;">Buy {atm} PE @ ₹{premium:.2f}</p> \
-                <b style="color:white;">Target: ₹{premium*1.2:.2f} | SL: ₹{premium*0.8:.2f}</b><br> \
-                <small style="color:white;">Entry Reason: Dual Timeframe Bearish + RSI Weakness</small> \
-            </div>', unsafe_allow_html=True)
+            st.markdown(f'''<div class="signal-card" style="background: linear-gradient(135deg, #cf304a, #ff4b4b);">
+                <h2 style="margin:0; color:white;">🔥 SIGNAL: STRONG SELL (PUT)</h2>
+                <p style="font-size:18px; color:white;">Target: {lp*0.99:.2f} | SL: {lp*1.005:.2f}</p>
+            </div>''', unsafe_allow_html=True)
+            st.markdown(f'''<div class="premium-box">
+                <b>🎯 OPTION ENTRY:</b> Buy <b>{atm_strike} PE</b><br>
+                <b>Entry Price:</b> Current Market Premium<br>
+                <b>Target:</b> 25% Profit | <b>StopLoss:</b> 15% of Premium
+            </div>''', unsafe_allow_html=True)
         else:
-            st.warning("⌛ SIDEWAYS MARKET: 1m and 15m trends are mismatched. No fresh entry recommended.")
+            st.warning("⌛ SIDEWAYS: Waiting for 1m and 15m trends to align. No trade.")
 
-        # --- CHART ---
-        chart_df = data_m.tail(50).reset_index()
+        # Robust Chart
+        chart_df = d_main.tail(50).reset_index()
         t_col = 'Datetime' if 'Datetime' in chart_df.columns else 'Date'
         times = chart_df[t_col].dt.strftime('%H:%M').tolist()
         vals = chart_df[['Open', 'Close', 'Low', 'High']].values.tolist()
-        opt = {"tooltip":{"trigger":"axis","axisPointer":{"type":"cross"}},"xAxis":{"data":times},"yAxis":{"scale":True},
-               "series":[{"type":"candlestick","data":vals,"itemStyle":{"color":"#00c076","color0":"#cf304a"}}]}
-        st_echarts(options=opt, height="400px")
+        opt = {"xAxis":{"data":times},"yAxis":{"scale":True},"series":[{"type":"candlestick","data":vals,"itemStyle":{"color":"#00c076","color0":"#cf304a"}}],"tooltip":{"trigger":"axis"}}
+        st_echarts(options=opt, height="450px")
 
-    elif nav == "Full Option Chain":
-        st.subheader(f"📊 {selected_asset} Option Chain (Near Expiry)")
-        calls, puts, atm = fetch_option_chain(symbol, lp)
-        if calls is not None:
-            df_chain = pd.merge(calls[['strike', 'lastPrice', 'change', 'openInterest']], 
-                                puts[['strike', 'lastPrice', 'change', 'openInterest']], 
-                                on='strike', suffixes=('_CE', '_PE'))
-            df_chain = df_chain.rename(columns={'strike': 'Strike'})
-            st.dataframe(df_chain.style.highlight_max(axis=0, color='#1e2130'), use_container_width=True)
-            
+    elif nav == "Option Chain & Greeks":
+        st.subheader(f"📊 {selected_asset} Near-ATM Chain")
+        tk = yf.Ticker(symbol)
+        try:
+            exp = tk.options[0]
+            chain = tk.option_chain(exp)
+            st.write(f"Expiry: {exp}")
+            st.dataframe(chain.calls[['strike', 'lastPrice', 'change', 'volume']].tail(10))
+        except: st.error("Option data not available for this asset.")
 
-# Auto Refresh 10s
+# Auto Refresh
 time.sleep(10)
 st.rerun()
